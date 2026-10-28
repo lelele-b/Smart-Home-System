@@ -1,0 +1,66 @@
+page {
+  font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Helvetica,
+    Segoe UI, Arial, Roboto, 'PingFang SC', 'miui', 'Hiragino Sans GB', 'Microsoft Yahei',
+    sans-serif;
+}
+.title{
+  text-align: center;
+  font-size: large;
+  margin-bottom: 6px;
+  margin-top:3px;
+}
+
+.pic{
+  text-align: center;
+  margin-top:20px;
+}
+
+.wendu{
+  margin-top:5px;
+}
+
+.light{
+  margin-top:30px;
+}
+
+.light2{
+  margin-top:30px;
+  text-align: center;
+}
+
+.dataTime{
+  color: rgba(69, 90, 100, 0.6);
+  margin-left: 12px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+  .stepvalue {
+    margin: 20rpx;
+    padding: 20rpx;
+    background: #f7f8fa;
+    border-radius: 12rpx;
+    font-size: 32rpx;
+  }
+  .img-row {
+    display: flex;          /* 让里面的图片 横着排成一行 */
+    flex-wrap: wrap;      /* 自动换行 → 4个就会变成2行 */
+    justify-content: space-around;  /* 均匀分布：左右间距相等 */
+    padding: 20rpx;          /* 上下左右留一点内边距，不贴着边 */
+  }
+  .img-item {
+    width: 45%;          /* 每行两个，留点间距 */
+    margin-bottom: 20rpx;/* 行间距 */
+    display: flex;
+    flex-direction: column; /* 图片在上，文字在下 */
+    align-items: center;    /* 水平居中 */
+  }
+  .img-item image {
+    width: 150rpx;    /* 图片宽度：100rpx */
+    height: 150rpx;   /* 图片高度：100rpx */
+  }
+  .status-text {
+    margin-top: 10rpx; /* 文字和图片的间距 */
+    font-size: 26rpx;
+    color: #333;
+  }

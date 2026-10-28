@@ -1,0 +1,80 @@
+<!--index.wxml-->
+<view >
+
+  <view class="van-hairline--surround title">智能云家居</view>
+  <view class="van-hairline--surround title">STM32F103 · ESP8266 · Bemfa</view>
+
+<!--设备状态-->
+<van-cell-group>
+  <van-cell title="设备状态" value="{{device_status}}" />
+</van-cell-group>
+<!--设备状态-->
+<!-- <van-cell-group>
+  <van-cell title="LED状态" value="{{ledOnOff}}" />
+</van-cell-group> -->
+<!--时间显示-->
+<view class="dataTime">上传时间：{{dataTime}}</view>
+
+<!--温湿度图片显示-->
+<view  class="pic">
+<van-row>
+  <van-col span="12" ><van-icon  size="60px" name="/utils/img/hum111.png" /></van-col>
+  <van-col span="12"><van-icon  size="60px" name="/utils/img/wendu.png" /></van-col>
+</van-row>
+</view>
+
+<!--温湿度数值-->
+<view  class="wendu">
+  <van-row style="text-align:center;">
+    <van-col span="12">湿度：{{shidu}} %</van-col>
+    <van-col span="12">温度：{{wendu}} ℃</van-col>
+  </van-row>
+</view>
+<!--光照烟雾图片显示-->
+<view  class="pic">
+<van-row>
+  <van-col span="12" ><van-icon  size="60px" name="/utils/img/illum.png" /></van-col>
+  <van-col span="12" ><van-icon  size="60px" name="/utils/img/yanwu.png" /></van-col>
+</van-row>
+</view>
+
+<!--光照烟雾数值-->
+<view  class="stepvalue">
+  <van-row style="text-align:center;">
+    <van-col span="12">光照：{{light}}
+    </van-col>
+    <van-col span="12">烟雾：{{smoke}}
+    </van-col>
+  </van-row>
+</view>
+
+<!-- 一行多图 + 下方状态文字 -->
+<view class="img-row">
+  <!-- LED 控制项 -->
+  <view class="img-item" bindtap="changeImg" data-index="0">
+    <image src="{{ imgGroup[0].stateList[imgGroup[0].currentIndex].src }}" />
+    <text class="status-text">{{ imgGroup[0].stateList[imgGroup[0].currentIndex].text }}</text>
+  </view>
+
+  <!-- BEEP 控制项 -->
+  <view class="img-item" bindtap="changeImg" data-index="1">
+    <image src="{{ imgGroup[1].stateList[imgGroup[1].currentIndex].src }}" />
+    <text class="status-text">{{ imgGroup[1].stateList[imgGroup[1].currentIndex].text }}</text>
+  </view>
+
+    <!-- RGB 控制项 -->
+    <view class="img-item" bindtap="changeImg" data-index="2">
+    <image src="{{ imgGroup[2].stateList[imgGroup[2].currentIndex].src }}" />
+    <text class="status-text">{{ imgGroup[2].stateList[imgGroup[2].currentIndex].text }}</text>
+  </view>
+
+   <!-- RELAY 控制项 -->
+   <view class="img-item" bindtap="changeImg" data-index="3">
+    <image src="{{ imgGroup[3].stateList[imgGroup[3].currentIndex].src }}" />
+    <text class="status-text">{{ imgGroup[3].stateList[imgGroup[3].currentIndex].text }}</text>
+  </view> 
+</view>
+
+
+
+</view>

@@ -1,0 +1,15 @@
+# Keil build outputs
+Objects/
+Listings/
+build.log
+*.uvguix.*
+
+# WeChat DevTools private settings (per-machine appid)
+miniprogram/project.private.config.json
+
+# OS / editor
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+__pycache__/
