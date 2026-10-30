@@ -143,37 +143,58 @@ static void WIFI_SendCmd(const char *cmd)
     WIFI_SendString("\r\n");
 }
 
-/*
- * 函数：WIFI_WaitFor
- * 参数：token 关键字，timeout_ms 超时毫秒
- * 返回：1 等到了，0 超时
- * 功能：在接收缓冲里等某个关键字出现（AT 命令的应答解析）
- */
-static uint8_t WIFI_WaitFor(const char *token, uint32_t timeout_ms)
+/* 函数：WIFI_TokenInRx  功能：缓冲里出现关键字就返回 1（只查一次，不等待） */
+static uint8_t WIFI_TokenInRx(const char *token)
 {
-    uint32_t start = Delay_GetTick();
-
-    while((Delay_GetTick() - start) < timeout_ms)
-    {
-        if(strstr((const char *)s_rx_buf, token) != 0)
-        {
-            return 1U;
-        }
-    }
-
-    return 0U;
+    return (strstr((const char *)s_rx_buf, token) != 0) ? 1U : 0U;
 }
 
-/*
- * 函数：WIFI_CmdWait
- * 功能：发命令 + 清缓冲 + 等应答，返回 1 表示应答里出现了 token
- */
-static uint8_t WIFI_CmdWait(const char *cmd, const char *token, uint32_t timeout_ms)
+/* 联网状态机的各个步骤 */
+typedef enum
 {
-    WIFI_ClearRx();
-    WIFI_SendCmd(cmd);
+    WIFI_ST_IDLE = 0U,          /* 空闲 */
+    WIFI_ST_RESET_LOW,          /* 把模块复位脚拉低 */
+    WIFI_ST_RESET_WAIT,         /* 等模块启动 */
+    WIFI_ST_AT,                 /* 试 AT，确认模块和波特率 */
+    WIFI_ST_ATE0,               /* 关回显 */
+    WIFI_ST_GMR,                /* 读模块版本（只打印） */
+    WIFI_ST_CWMODE,             /* Station 模式 */
+    WIFI_ST_JOIN,               /* 连 2.4G 热点 */
+    WIFI_ST_CIPSTART,           /* 连巴法云 TCP */
+    WIFI_ST_CIPMODE,            /* 开透传 */
+    WIFI_ST_CIPSEND,            /* 等模块回 ">" */
+    WIFI_ST_SUBSCRIBE,          /* 发订阅命令 */
+    WIFI_ST_READY,              /* 已连上 */
+    WIFI_ST_RETRY               /* 失败后等一会儿自动重来 */
+} WiFiState;
 
-    return WIFI_WaitFor(token, timeout_ms);
+static uint8_t  s_state      = (uint8_t)WIFI_ST_IDLE;
+static uint32_t s_state_tick = 0U;      /* 进入当前状态的时刻 */
+static uint8_t  s_at_try     = 0U;      /* AT 试了几次 */
+static uint8_t  s_send_try   = 0U;      /* CIPSEND 试了几次 */
+static uint8_t  s_send_phase = 0U;      /* 0=还没发 CIPSEND  1=已发，等 ">" */
+static uint8_t  s_last_err   = WIFI_OK;
+static char     s_cmd[160];
+
+/* 函数：WIFI_Enter  功能：切到下一个状态并重记时间戳 */
+static void WIFI_Enter(uint8_t state)
+{
+    s_state      = state;
+    s_state_tick = Delay_GetTick();
+}
+
+/* 函数：WIFI_Elapsed  功能：当前状态已经停留了多少毫秒 */
+static uint32_t WIFI_Elapsed(void)
+{
+    return Delay_GetTick() - s_state_tick;
+}
+
+/* 函数：WIFI_Fail  功能：联网失败，记下错误码，十秒后自动重来 */
+static void WIFI_Fail(uint8_t err)
+{
+    s_last_err  = err;
+    s_connected = 0U;
+    WIFI_Enter((uint8_t)WIFI_ST_RETRY);
 }
 
 /*
@@ -205,104 +226,231 @@ void WiFi_Init(void)
 }
 
 /*
- * 函数：WiFi_Connect
- * 返回：WIFI_OK 或 WIFI_ERR_xxx
- * 功能：完整走一遍上电流程：复位 -> AT -> 入网 -> 连服务器 -> 进透传 -> 订阅
- * 说明：这里是阻塞式的（跟课程例程一致），连不上就返回错误码，
- *       主循环看到没连上会过一会儿再调一次
+ * 函数：WiFi_ConnectStart
+ * 功能：启动一次联网流程，只做状态切换 + 拉低复位脚，立刻返回
+ * 说明：真正联网在主循环里由 WiFi_Task() 一步步推进，不再阻塞
  */
-uint8_t WiFi_Connect(void)
+void WiFi_ConnectStart(void)
 {
-    char cmd[128];
-    uint8_t i;
-    uint8_t got;
+    s_connected  = 0U;
+    s_at_try     = 0U;
+    s_send_try   = 0U;
+    s_send_phase = 0U;
+    s_last_err   = WIFI_OK;
 
-    s_connected = 0U;
-
-    /* 1. 硬件复位模块 */
-    GPIO_ResetBits(WIFI_RST_PORT, WIFI_RST_PIN);
-    Delay_ms(300U);
-    GPIO_SetBits(WIFI_RST_PORT, WIFI_RST_PIN);
-    Delay_ms(1200U);
-
-    /* 2. 试 3 次 AT，确认模块和波特率对得上 */
-    if((WIFI_CmdWait("AT", "OK", WIFI_AT_TIMEOUT) == 0U) &&
-       (WIFI_CmdWait("AT", "OK", WIFI_AT_TIMEOUT) == 0U) &&
-       (WIFI_CmdWait("AT", "OK", WIFI_AT_TIMEOUT) == 0U))
-    {
-        printf("WIFI: AT no answer\r\n");
-        return WIFI_ERR_AT;
-    }
-
-    /* 3. 关回显，后面读应答干净一些 */
-    (void)WIFI_CmdWait("ATE0", "OK", WIFI_AT_TIMEOUT);
-    (void)WIFI_CmdWait("AT+GMR", "OK", WIFI_AT_TIMEOUT);
-    printf("WIFI GMR: [%s]\r\n", (char *)s_rx_buf);
-
-    /* 4. Station 模式 */
-    if(WIFI_CmdWait("AT+CWMODE=1", "OK", WIFI_AT_TIMEOUT) == 0U)
-    {
-        printf("WIFI: set mode fail\r\n");
-        return WIFI_ERR_AT;
-    }
-
-    /* 5. 连 2.4G 热点 */
-    sprintf(cmd, "AT+CWJAP=\"%s\",\"%s\"", WIFI_SSID, WIFI_PASSWORD);
-    if(WIFI_CmdWait(cmd, "OK", WIFI_JOIN_TIMEOUT) == 0U)
-    {
-        printf("WIFI: join AP fail (check SSID/PWD/2.4G)\r\n");
-        return WIFI_ERR_JOIN;
-    }
-    printf("WIFI: join AP ok\r\n");
-
-    /* 6. 连巴法云 TCP 服务器 */
-    sprintf(cmd, "AT+CIPSTART=\"TCP\",\"%s\",%d", WIFI_SERVER, (int)WIFI_PORT);
-    if(WIFI_CmdWait(cmd, "CONNECT", WIFI_TCP_TIMEOUT) == 0U)
-    {
-        printf("WIFI: tcp connect fail\r\n");
-        return WIFI_ERR_TCP;
-    }
-
-    /* 7. 开透传模式 */
-    if(WIFI_CmdWait("AT+CIPMODE=1", "OK", WIFI_AT_TIMEOUT) == 0U)
-    {
-        printf("WIFI: rx after CIPMODE=[%s]\r\n", (char *)s_rx_buf);
-        printf("WIFI: set transparent fail\r\n");
-        return WIFI_ERR_SEND;
-    }
-
-    /* 8. 进入发送状态，模块回 ">" 后就可以直接写数据了
-     *    注意：AT 1.2.0 固件刚切完 CIPMODE 会回 "busy p..."，
-     *          所以这里延时 + 重试几次，不能指望一次就拿到 ">" */
-    Delay_ms(500U);
-    got = 0U;
-    for(i = 0U; i < 5U; i++)
-    {
-        if(WIFI_CmdWait("AT+CIPSEND", ">", 2000U) != 0U)
-        {
-            got = 1U;
-            break;
-        }
-        printf("WIFI: cipsend retry %d, rx=[%s]\r\n", (int)i, (char *)s_rx_buf);
-        Delay_ms(600U);
-    }
-
-    if(got == 0U)
-    {
-        printf("WIFI: enter send fail\r\n");
-        return WIFI_ERR_SEND;
-    }
-
-    /* 9. 订阅两个主题 */
     WIFI_ClearRx();
-    sprintf(cmd, "cmd=1&uid=%s&topic=%s\r\n", WIFI_BEMFA_UID, WIFI_TOPIC_SUB);
-    WIFI_SendString(cmd);
-    Delay_ms(300U);
+    GPIO_ResetBits(WIFI_RST_PORT, WIFI_RST_PIN);
+    WIFI_Enter((uint8_t)WIFI_ST_RESET_LOW);
+}
 
-    s_connected = 1U;
-    printf("WIFI: bemfa ready\r\n");
+/*
+ * 函数：WiFi_Task
+ * 返回：WIFI_OK 已连上；WIFI_BUSY 还在连；其它值 = 上一次失败的错误码
+ * 功能：联网状态机，主循环每 50ms 调一次
+ *       等热点最多 15 秒也不卡按键，失败自动重试
+ */
+uint8_t WiFi_Task(void)
+{
+    switch(s_state)
+    {
+        case WIFI_ST_IDLE:
+            return (s_connected != 0U) ? WIFI_OK : WIFI_BUSY;
 
-    return WIFI_OK;
+        case WIFI_ST_RESET_LOW:
+            if(WIFI_Elapsed() >= 300U)
+            {
+                GPIO_SetBits(WIFI_RST_PORT, WIFI_RST_PIN);
+                WIFI_Enter((uint8_t)WIFI_ST_RESET_WAIT);
+            }
+            return WIFI_BUSY;
+
+        case WIFI_ST_RESET_WAIT:
+            if(WIFI_Elapsed() >= 1200U)
+            {
+                WIFI_ClearRx();
+                WIFI_SendCmd("AT");
+                s_at_try = 1U;
+                WIFI_Enter((uint8_t)WIFI_ST_AT);
+            }
+            return WIFI_BUSY;
+
+        case WIFI_ST_AT:
+            if(WIFI_TokenInRx("OK") != 0U)
+            {
+                WIFI_ClearRx();
+                WIFI_SendCmd("ATE0");
+                WIFI_Enter((uint8_t)WIFI_ST_ATE0);
+            }
+            else if(WIFI_Elapsed() >= WIFI_AT_TIMEOUT)
+            {
+                if(s_at_try < 3U)
+                {
+                    s_at_try++;
+                    WIFI_ClearRx();
+                    WIFI_SendCmd("AT");
+                    WIFI_Enter((uint8_t)WIFI_ST_AT);
+                }
+                else
+                {
+                    printf("WIFI: AT no answer\r\n");
+                    WIFI_Fail(WIFI_ERR_AT);
+                }
+            }
+            return WIFI_BUSY;
+
+        case WIFI_ST_ATE0:
+            if((WIFI_TokenInRx("OK") != 0U) || (WIFI_Elapsed() >= WIFI_AT_TIMEOUT))
+            {
+                WIFI_ClearRx();
+                WIFI_SendCmd("AT+GMR");
+                WIFI_Enter((uint8_t)WIFI_ST_GMR);
+            }
+            return WIFI_BUSY;
+
+        case WIFI_ST_GMR:
+            if((WIFI_TokenInRx("OK") != 0U) || (WIFI_Elapsed() >= WIFI_AT_TIMEOUT))
+            {
+                printf("WIFI GMR: [%s]\r\n", (char *)s_rx_buf);
+                WIFI_ClearRx();
+                WIFI_SendCmd("AT+CWMODE=1");
+                WIFI_Enter((uint8_t)WIFI_ST_CWMODE);
+            }
+            return WIFI_BUSY;
+
+        case WIFI_ST_CWMODE:
+            if(WIFI_TokenInRx("OK") != 0U)
+            {
+                sprintf(s_cmd, "AT+CWJAP=\"%s\",\"%s\"", WIFI_SSID, WIFI_PASSWORD);
+                WIFI_ClearRx();
+                WIFI_SendCmd(s_cmd);
+                WIFI_Enter((uint8_t)WIFI_ST_JOIN);
+            }
+            else if(WIFI_Elapsed() >= WIFI_AT_TIMEOUT)
+            {
+                printf("WIFI: set mode fail\r\n");
+                WIFI_Fail(WIFI_ERR_AT);
+            }
+            return WIFI_BUSY;
+
+        case WIFI_ST_JOIN:
+            if(WIFI_TokenInRx("OK") != 0U)
+            {
+                printf("WIFI: join AP ok\r\n");
+                sprintf(s_cmd, "AT+CIPSTART=\"TCP\",\"%s\",%d", WIFI_SERVER, (int)WIFI_PORT);
+                WIFI_ClearRx();
+                WIFI_SendCmd(s_cmd);
+                WIFI_Enter((uint8_t)WIFI_ST_CIPSTART);
+            }
+            else if(WIFI_TokenInRx("FAIL") != 0U)
+            {
+                printf("WIFI: join AP fail (check SSID/PWD/2.4G)\r\n");
+                WIFI_Fail(WIFI_ERR_JOIN);
+            }
+            else if(WIFI_Elapsed() >= WIFI_JOIN_TIMEOUT)
+            {
+                printf("WIFI: join AP timeout\r\n");
+                WIFI_Fail(WIFI_ERR_JOIN);
+            }
+            return WIFI_BUSY;
+
+        case WIFI_ST_CIPSTART:
+            if(WIFI_TokenInRx("CONNECT") != 0U)
+            {
+                WIFI_ClearRx();
+                WIFI_SendCmd("AT+CIPMODE=1");
+                WIFI_Enter((uint8_t)WIFI_ST_CIPMODE);
+            }
+            else if(WIFI_TokenInRx("ERROR") != 0U)
+            {
+                printf("WIFI: tcp connect fail\r\n");
+                WIFI_Fail(WIFI_ERR_TCP);
+            }
+            else if(WIFI_Elapsed() >= WIFI_TCP_TIMEOUT)
+            {
+                printf("WIFI: tcp connect timeout\r\n");
+                WIFI_Fail(WIFI_ERR_TCP);
+            }
+            return WIFI_BUSY;
+
+        case WIFI_ST_CIPMODE:
+            if(WIFI_TokenInRx("OK") != 0U)
+            {
+                s_send_phase = 0U;
+                WIFI_Enter((uint8_t)WIFI_ST_CIPSEND);
+            }
+            else if(WIFI_Elapsed() >= WIFI_AT_TIMEOUT)
+            {
+                printf("WIFI: set transparent fail\r\n");
+                WIFI_Fail(WIFI_ERR_SEND);
+            }
+            return WIFI_BUSY;
+
+        case WIFI_ST_CIPSEND:
+            if(s_send_phase == 0U)
+            {
+                /* AT 1.2.0 固件刚切完 CIPMODE 会回 "busy p..."，先等半秒再要 ">" */
+                if(WIFI_Elapsed() >= 500U)
+                {
+                    WIFI_ClearRx();
+                    WIFI_SendCmd("AT+CIPSEND");
+                    s_send_phase = 1U;
+                    WIFI_Enter((uint8_t)WIFI_ST_CIPSEND);
+                }
+                return WIFI_BUSY;
+            }
+
+            if(WIFI_TokenInRx(">") != 0U)
+            {
+                s_send_phase = 0U;
+                sprintf(s_cmd, "cmd=1&uid=%s&topic=%s\r\n", WIFI_BEMFA_UID, WIFI_TOPIC_SUB);
+                WIFI_ClearRx();
+                WIFI_SendString(s_cmd);
+                WIFI_Enter((uint8_t)WIFI_ST_SUBSCRIBE);
+            }
+            else if(WIFI_Elapsed() >= 2000U)
+            {
+                s_send_try++;
+
+                if(s_send_try >= 5U)
+                {
+                    printf("WIFI: enter send fail\r\n");
+                    s_send_phase = 0U;
+                    WIFI_Fail(WIFI_ERR_SEND);
+                }
+                else
+                {
+                    printf("WIFI: cipsend retry %d\r\n", (int)s_send_try);
+                    WIFI_ClearRx();
+                    WIFI_SendCmd("AT+CIPSEND");
+                    WIFI_Enter((uint8_t)WIFI_ST_CIPSEND);
+                }
+            }
+            return WIFI_BUSY;
+
+        case WIFI_ST_SUBSCRIBE:
+            if(WIFI_Elapsed() >= 300U)
+            {
+                s_connected = 1U;
+                printf("WIFI: bemfa ready\r\n");
+                WIFI_Enter((uint8_t)WIFI_ST_READY);
+            }
+            return WIFI_BUSY;
+
+        case WIFI_ST_READY:
+            return WIFI_OK;
+
+        case WIFI_ST_RETRY:
+            if(WIFI_Elapsed() >= 10000U)
+            {
+                WiFi_ConnectStart();
+                return WIFI_BUSY;
+            }
+            return s_last_err;
+
+        default:
+            WIFI_Enter((uint8_t)WIFI_ST_IDLE);
+            return WIFI_BUSY;
+    }
 }
 
 /* 函数：WiFi_IsConnected  功能：1 = 已经连上巴法云并进入透传 */

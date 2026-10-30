@@ -36,12 +36,13 @@
 
 #define WIFI_RX_SIZE        600U                    /* 接收缓冲大小 */
 
-/* WiFi_Connect 的返回值 */
+/* 联网状态机返回值 */
 #define WIFI_OK             0U                      /* 全部成功，已进入透传 */
 #define WIFI_ERR_AT         1U                      /* AT 不通，模块没接好 */
 #define WIFI_ERR_JOIN       2U                      /* 连不上热点 */
 #define WIFI_ERR_TCP        3U                      /* 连不上巴法云服务器 */
 #define WIFI_ERR_SEND       4U                      /* 进不了透传模式 */
+#define WIFI_BUSY           5U                      /* 正在连接中（非阻塞状态机用） */
 
 /* 云端下发命令里解析出的字段（按位或起来告诉主循环哪几项变了） */
 #define WIFI_CTRL_LED       0x01U
@@ -51,7 +52,8 @@
 
 uint8_t WiFi_ConfigReady(void);          /* 1 = 热点和 UID 都填好了 */
 void    WiFi_Init(void);
-uint8_t WiFi_Connect(void);
+void    WiFi_ConnectStart(void);            /* 启动一次联网流程，立刻返回 */
+uint8_t WiFi_Task(void);                    /* 主循环周期调用：WIFI_OK / WIFI_BUSY / 错误码 */
 uint8_t WiFi_IsConnected(void);
 void    WiFi_PublishData(int16_t tem_x10, uint8_t hum, uint16_t light, uint16_t smoke,
                          uint8_t led, uint8_t beep, uint8_t rgb, uint8_t relay);

@@ -45,7 +45,6 @@
 #define TASK_SENSOR_MS  2000U       /* 传感器采集周期（DHT11 不能读太快） */
 #define TASK_CLOUD_MS   5000U       /* 上传巴法云的周期 */
 #define TASK_CTRL_MS    50U         /* 查云端下发命令的周期 */
-#define TASK_RETRY_MS   30000U      /* 断网重连间隔 */
 #define BEEP_ON_MS      40U         /* 按键提示音长度 */
 #define KEY4_LED_HOLD   1000U       /* KEY4 全亮保持时间 */
 
@@ -323,7 +322,6 @@ int main(void)
     uint32_t t_sensor    = 0U;
     uint32_t t_cloud     = 0U;
     uint32_t t_ctrl      = 0U;
-    uint32_t t_retry     = 0U;
     uint32_t beep_off_at = 0U;
     uint32_t led_off_at  = 0U;
     uint8_t  ret;
@@ -360,11 +358,7 @@ int main(void)
     else
     {
         printf("WIFI connecting...\r\n");
-        ret = WiFi_Connect();
-        s_wifi_ok  = (ret == WIFI_OK) ? 1U : 0U;
-        s_cloud_ok = s_wifi_ok;
-        printf("WIFI connect ret=%d\r\n", (int)ret);
-        Ui_UpdateTip(s_wifi_ok ? "CLOUD READY" : "CLOUD FAIL");
+        WiFi_ConnectStart();        /* 只置状态，立刻返回；联网在主循环里推进 */
     }
 
     Ui_UpdateCloud(s_wifi_ok, s_cloud_ok);
@@ -437,6 +431,28 @@ int main(void)
         if((now - t_ctrl) >= TASK_CTRL_MS)
         {
             t_ctrl = now;
+
+            /* 联网状态机跟着 50ms 周期跑，断网重连也在后台完成，不卡按键 */
+            if(WiFi_ConfigReady() != 0U)
+            {
+                ret = WiFi_Task();
+
+                if(ret == WIFI_OK)
+                {
+                    if(s_cloud_ok == 0U)
+                    {
+                        s_wifi_ok  = 1U;
+                        s_cloud_ok = 1U;
+                        Ui_UpdateTip("CLOUD READY");
+                    }
+                }
+                else if(ret != WIFI_BUSY)
+                {
+                    s_wifi_ok  = 0U;
+                    s_cloud_ok = 0U;
+                }
+            }
+
             Cloud_Handle();
         }
 
@@ -476,19 +492,7 @@ int main(void)
             }
         }
 
-        /* ---------------- 任务 7：断网重连 30s ---------------- */
-        if((s_cloud_ok == 0U) &&
-           (WiFi_ConfigReady() != 0U) &&
-           ((now - t_retry) >= TASK_RETRY_MS))
-        {
-            t_retry = now;
-
-            printf("WIFI reconnecting...\r\n");
-            ret = WiFi_Connect();
-            s_wifi_ok  = (ret == WIFI_OK) ? 1U : 0U;
-            s_cloud_ok = s_wifi_ok;
-            Ui_UpdateTip(s_wifi_ok ? "CLOUD READY" : "CLOUD FAIL");
-        }
+        /* 断网重连已经在任务 3 的联网状态机里自动完成，这里不再单独占一个任务 */
 
         /* ---------------- 任务 8：到点关蜂鸣器 ---------------- */
         if((beep_off_at != 0U) && ((int32_t)(now - beep_off_at) >= 0))
